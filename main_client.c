@@ -37,35 +37,27 @@ int main(int argc, char const *argv[])
 
     do {
         printf("Ingrese la operacion a realizas:\n");
-        printf("1 - Comprar Ticket.\n");
-        printf("2 - Reservar Ticket.\n");
-        printf("3 - Confirmar compra de Ticket.\n");
+        printf("1 - Reservar Ticket.\n");
+        printf("2 - Confirmar compra de Ticket.\n");
         printf("0 - Finalizar.\n");
 
         scanf("%d", &op);
         char json[64];
         switch (op)
         {
-        case 1:
-            /* Comprar Ticket*/
-            strcpy(json,"{\"type\": 1}");
-            send(sock ,  json, strlen(json) , 0 ); 
-            valread = read( sock , buffer, 1024); 
-            printf("%s\n",buffer ); 
-            break;
-        case 2: 
+        case 1: 
             /* Reservar Ticket*/            
-            strcpy(json,"{\"type\": 2}");
+            strcpy(json,"{\"type\": 1}");
             send(sock , json , strlen(json) , 0 ); 
             valread = read( sock , buffer, 1024); 
             printf("%s\n",buffer ); 
             break;
-        case 3: 
+        case 2: 
             /* Confirmar compra Ticket*/    
             int id;
             printf("Ingrese el id del ticket reservado.\n");
             scanf("%d", &id);     
-            sprintf(json,"{\"type\": 3, \"ticket\":%d}", id);   
+            sprintf(json,"{\"type\": 2, \"ticket\":%d}", id);   
             send(sock , json , strlen(json) , 0 ); 
             valread = read( sock , buffer, 1024); 
             printf("%s\n",buffer ); 
