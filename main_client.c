@@ -43,27 +43,27 @@ int main(int argc, char const *argv[])
 
         scanf("%d", &op);
         char json[64];
+        int id;
         switch (op)
         {
         case 1: 
             /* Reservar Ticket*/            
             strcpy(json,"{\"type\": 1}");
             send(sock , json , strlen(json) , 0 ); 
-            valread = read( sock , buffer, 1024); 
-            printf("%s\n",buffer ); 
+            //valread = read( sock , buffer, 1024); 
+            printf("Solicitud enviada.\n"); 
             break;
         case 2: 
             /* Confirmar compra Ticket*/    
-            int id;
             printf("Ingrese el id del ticket reservado.\n");
             scanf("%d", &id);     
             sprintf(json,"{\"type\": 2, \"ticket\":%d}", id);   
             send(sock , json , strlen(json) , 0 ); 
-            valread = read( sock , buffer, 1024); 
-            printf("%s\n",buffer ); 
+            //valread = read( sock , buffer, 1024); 
+            printf("Solicitud enviada.\n"); 
             break;
         case 0: 
-            printf("Finalizando...");
+            printf("Finalizando...\n");
             break;
         default:
             printf("Opcion invalida, por favor vuelva a intentar.\n");

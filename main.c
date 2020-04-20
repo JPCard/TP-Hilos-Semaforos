@@ -1,4 +1,5 @@
 #include "sqlite3/sqlite3.c"
+#include "json_parser.h"
 
 #include <stdio.h>
 #include <unistd.h> //para el sleep
@@ -15,7 +16,23 @@
 #define REQUEST_CONFIRM     2
 #define REQUEST_MAX         10
 #define TICKETS_TOTAL       10
-#define PORT 12345
+#define PORT                12345
+#define TOKEN_REQUEST_TYPE  1
+#define TOKEN_TICKET_ID     3
+//confiamos en que respete el formato del json
+
+//----JSON-----
+static const char *JSON_STRING =
+    "{\"type\": 5, \"ticket\": 24}";
+
+static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
+  if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
+      strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
+    return 0;
+  }
+  return -1;
+}
+//----JSON-----
 
 typedef struct {
     char type;
@@ -185,6 +202,20 @@ void setStateInDB(int idTicket, int state) {
     }
 }
 
+int getTicketStateDB(int idTicket){
+    int state = -1;
+    char aux[126];
+    sqlite3_stmt *stmt;
+    sprintf(aux, "SELECT state FROM tickets WHERE id = %d;", idTicket);
+    sqlite3_prepare_v2(ctx.database, aux, -1, &stmt, NULL);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        state = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+
+    return state;
+}
+
 void setFreeInDB(int idTicket) {
     setStateInDB(idTicket, STATE_FREE);
 }
@@ -209,8 +240,18 @@ void reserveTicket() {
 }
 
 void purchaseTicket(int idTicket){
-	setPurchasedInDB(idTicket);
-    printf("Solicitud aceptada: ticket %d vendido\n",idTicket);
+    int state = getTicketStateDB(idTicket);
+    if (state == STATE_RESERVED){
+        setPurchasedInDB(idTicket);
+        printf("Solicitud aceptada: ticket %d vendido\n",idTicket);
+    }
+    else {
+        printf("Solicitud Rechazada\n");
+        if(state == STATE_FREE)
+            printf("El ticket %d no fue reservado.\n",idTicket);
+        else 
+            printf("El ticket %d fue vendido anteriormente.\n",idTicket);
+    }
 }
 
 void releaseTicket(int idTicket){
@@ -276,6 +317,62 @@ void *dbThreadFunction(void *vargp) {
 }
 
 ///
+/// ---------------------JSon Parsing
+///
+
+
+
+//-1 es valor de error
+//token es el indice del json
+Request *getRequestFromJSON(char * requestStr){
+    int r;
+	int i;
+	jsmn_parser p;
+	jsmntok_t t[128]; /* We expect no more than 128 tokens */
+	Request* req = (Request*) malloc(sizeof(Request));
+	req->ticketId = -1;
+
+	jsmn_init(&p);
+    r = jsmn_parse(&p, requestStr, strlen(requestStr), t, sizeof(t) / sizeof(t[0]));
+    if (r < 0) {
+        printf("Failed to parse JSON: %d\n", r);
+		free(req);
+		return NULL;
+	}
+
+    /* Assume the top-level element is an object */
+    if (r < 1 || t[0].type != JSMN_OBJECT) {
+        printf("Object expected\n");
+        free(req);
+        return NULL;
+    }
+
+	for (i = 1; i < r; i++)
+	{
+		if (jsoneq(requestStr, &t[i], "type") == 0)
+		{
+			/* We may use strndup() to fetch string value */
+			char aux[20];
+            i++; //movemos hacia el valor
+			sprintf(aux, "%.*s", t[i].end - t[i].start, requestStr + t[i].start);
+			printf("type: %s", aux);
+			req->type = atoi(aux);
+		}
+
+	    if (jsoneq(requestStr, &t[i], "ticket") == 0)
+	    {
+		    char aux[20];
+            i++; //movemos hacia el valor
+            sprintf(aux, "%.*s", t[i].end - t[i].start, requestStr + t[i].start);
+            printf("id: %s", aux);
+            req->ticketId = atoi(aux);            
+	    }
+	}
+
+	return req;
+}
+
+///
 /// SOCKET THREAD
 ///
 
@@ -320,22 +417,28 @@ void *socketThreadFunction(void *vargp) {
         perror("accept"); 
         exit(EXIT_FAILURE); 
     } 
+    while (1){
+        valread = read(new_socket , buffer, 1024); 
+        printf("%s\n", buffer);
 
-    valread = read( new_socket , buffer, 1024); 
-    printf("%s\n", buffer);
+        // Create Request Thread
+        // Parse JSon
+        /*
+        { type: 1, ticket: 1}
+        */
 
-    // Create Request Thread
-    // Parse JSon
-    int req_type, ticket_id;
-    if (req_type == 1){
-        createRequestThread(REQUEST_RESERVE, 0);
+        Request *req;
+        req = getRequestFromJSON(buffer);
+        if (req->type == 1){
+            createRequestThread(REQUEST_RESERVE, 0);
+        }
+        else if (req->type == 2){
+            createRequestThread(REQUEST_CONFIRM, req->ticketId);
+        }
+        //si no devuleve nada esto no va
+        send(new_socket , hello , strlen(hello) , 0 ); 
+        printf("Hello message sent\n"); 
     }
-    else if (req_type == 2){
-        createRequestThread(REQUEST_CONFIRM, ticket_id);
-    }
-
-    send(new_socket , hello , strlen(hello) , 0 ); 
-    printf("Hello message sent\n"); 
        
     /*
     sleep(1);
@@ -381,10 +484,87 @@ void createRequestThread(int requestType, int ticketId) {
 }
 
 int main(int argc, char *argv[]) {
-    pthread_t dbThreadId, socketThreadId;
-    pthread_create(&dbThreadId, NULL, dbThreadFunction, NULL);
+	pthread_t dbThreadId, socketThreadId;
+	pthread_create(&dbThreadId, NULL, dbThreadFunction, NULL);
     pthread_create(&socketThreadId, NULL, socketThreadFunction, NULL);
     pthread_join(dbThreadId, NULL);
     pthread_join(socketThreadId, NULL);
 	return 0;
 }
+
+
+/*
+ * A small example of jsmn parsing when JSON structure is known and number of
+ * tokens is predictable.
+ /
+
+static const char *JSON_STRING =
+    "{\"user\": \"johndoe\", \"admin\": false, \"uid\": 1000,\n  "
+    "\"groups\": [\"users\", \"wheel\", \"audio\", \"video\"]}";
+
+static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
+  if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
+      strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
+    return 0;
+  }
+  return -1;
+}
+
+
+/*
+
+int main() {
+  int i;
+  int r;
+  jsmn_parser p;
+  jsmntok_t t[128]; /* We expect no more than 128 tokens /
+ 
+  jsmn_init(&p);
+  r = jsmn_parse(&p, JSON_STRING, strlen(JSON_STRING), t,
+                 sizeof(t) / sizeof(t[0]));
+  if (r < 0) {
+    printf("Failed to parse JSON: %d\n", r);
+    return 1;
+  }
+
+  /* Assume the top-level element is an object /
+  if (r < 1 || t[0].type != JSMN_OBJECT) {
+    printf("Object expected\n");
+    return 1;
+  }
+
+  /* Loop over all keys of the root object /
+  for (i = 1; i < r; i++) {
+    if (jsoneq(JSON_STRING, &t[i], "user") == 0) {
+      /* We may use strndup() to fetch string value /
+      printf("- User: %.*s\n", t[i + 1].end - t[i + 1].start,
+             JSON_STRING + t[i + 1].start);
+      i++;
+    } else if (jsoneq(JSON_STRING, &t[i], "admin") == 0) {
+      /* We may additionally check if the value is either "true" or "false" *
+      printf("- Admin: %.*s\n", t[i + 1].end - t[i + 1].start,
+             JSON_STRING + t[i + 1].start);
+      i++;
+    } else if (jsoneq(JSON_STRING, &t[i], "uid") == 0) {
+      /* We may want to do strtol() here to get numeric value /
+      printf("- UID: %.*s\n", t[i + 1].end - t[i + 1].start,
+             JSON_STRING + t[i + 1].start);
+      i++;
+    } else if (jsoneq(JSON_STRING, &t[i], "groups") == 0) {
+      int j;
+      printf("- Groups:\n");
+      if (t[i + 1].type != JSMN_ARRAY) {
+        continue; /* We expect groups to be an array of strings /
+      }
+      for (j = 0; j < t[i + 1].size; j++) {
+        jsmntok_t *g = &t[i + j + 2];
+        printf("  * %.*s\n", g->end - g->start, JSON_STRING + g->start);
+      }
+      i += t[i + 1].size + 1;
+    } else {
+      printf("Unexpected key: %.*s\n", t[i].end - t[i].start,
+             JSON_STRING + t[i].start);
+    }
+  }
+  return EXIT_SUCCESS;
+}*/
