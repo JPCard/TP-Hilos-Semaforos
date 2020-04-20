@@ -47,14 +47,14 @@ int main(int argc, char const *argv[])
         {
         case 1:
             /* Comprar Ticket*/
-            *json = "{\"type\": 1}";
+            strcpy(json,"{\"type\": 1}");
             send(sock ,  json, strlen(json) , 0 ); 
             valread = read( sock , buffer, 1024); 
             printf("%s\n",buffer ); 
             break;
         case 2: 
-            /* Reservar Ticket*/
-            *json = "{\"type\": 1}";
+            /* Reservar Ticket*/            
+            strcpy(json,"{\"type\": 2}");
             send(sock , json , strlen(json) , 0 ); 
             valread = read( sock , buffer, 1024); 
             printf("%s\n",buffer ); 
