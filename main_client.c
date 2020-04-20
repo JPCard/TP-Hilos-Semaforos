@@ -42,7 +42,7 @@ int main(int argc, char const *argv[])
         printf("0 - Finalizar.\n");
 
         scanf("%d", &op);
-        char *json;
+        char json[10];
         switch (op)
         {
         case 1:
