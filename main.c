@@ -16,27 +16,21 @@
 #define REQUEST_CONFIRM     2
 #define REQUEST_MAX         10
 #define TICKETS_TOTAL       10
-#define PORT                12345
+#define SERVER_PORT         12345
+#define SERVER_QUEUE_SIZE   5
 #define TOKEN_REQUEST_TYPE  1
 #define TOKEN_TICKET_ID     3
-//confiamos en que respete el formato del json
+#define REQUEST_REPLY_SIZE  256
 
-//----JSON-----
-static const char *JSON_STRING =
-    "{\"type\": 5, \"ticket\": 24}";
-
-static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
-  if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
-      strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
-    return 0;
-  }
-  return -1;
-}
-//----JSON-----
+#define PRINT_DB_AFTER_CHANGES
 
 typedef struct {
+    int id;
     char type;
-    int ticketId;
+    int ticket;
+    pthread_mutex_t *waitMutex;
+    pthread_cond_t *waitCondition;
+    char *reply;
 } Request;
 
 typedef struct {
@@ -49,11 +43,28 @@ typedef struct {
   pthread_cond_t queueCondition;
   pthread_mutex_t queueMutex;
   RequestQueue rq;
+  int lastRequestId;
 } Context;
 
 Context ctx;
 
-//QUEUE FUNCTIONS
+///
+/// JSON
+///
+
+static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
+  if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
+      strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
+    return 0;
+  }
+  return -1;
+}
+
+void formatJSONError(char *out, int max, char *message) {
+    snprintf(out, max, "{ \"error\":\"%s\" }", message);
+}
+
+// QUEUE FUNCTIONS
 
 void initializeQueueRequest() {
     ctx.rq.first = ctx.rq.last = -1;
@@ -100,19 +111,6 @@ Request dequeueRequest() {
 
     return ctx.rq.queue[idx];
 }
-
-// Arquitectura de threads:
-//  Thread principal:
-//    - Crear thread DB.
-//    - Crear thread de comunicacion.
-//    - Join ambos threads.
-//  Thread de DB:
-//    - Consume cola de solicitudes.
-//  Thread de comunicacion por sockets:
-//    - Por cada solicitud entrante, crea un thread para manejarlo.
-//  Thread por cada solicitud:
-//    - Demora artificial aleatoria.
-//    - Encolar solicitud para DB.
 
 ///
 /// DATABASE THREAD
@@ -181,7 +179,7 @@ void showTickets() {
 	sqlite3_finalize(stmt);
 }
 
-int getFreeTicketIdFromDB() {
+int getFreeticketFromDB() {
     int free_id = 0;
     sqlite3_stmt *stmt;
     sqlite3_prepare_v2(ctx.database, "SELECT id FROM tickets WHERE state = 0;", -1, &stmt, NULL);
@@ -200,6 +198,10 @@ void setStateInDB(int idTicket, int state) {
     if (sqlite3_exec(ctx.database, query, NULL, NULL, &error) != 0) {
         printf("sqlite3_exec error: %s\n", error);
     }
+
+#ifdef PRINT_DB_AFTER_CHANGES
+    showTickets();
+#endif
 }
 
 int getTicketStateDB(int idTicket){
@@ -228,54 +230,52 @@ void setPurchasedInDB(int idTicket) {
     setStateInDB(idTicket, STATE_PURCHASED);
 } 
 
-void reserveTicket() {
-	int idTicket = getFreeTicketIdFromDB();
-    if (idTicket) {
+void reserveTicket(const Request r) {
+	int idTicket = getFreeticketFromDB();
+    if (idTicket > 0) {
         setReservedInDB(idTicket);
-        printf("Solicitud aceptada: ticket %d reservado.\n", idTicket);
+        snprintf(r.reply, REQUEST_REPLY_SIZE, "{ \"ticket\":%d }", idTicket);
+        printf("Solicitud #%d aceptada: ticket #%d reservado.\n", r.id, idTicket);
     }
     else {
-        printf("Solicitud rechazada: no hay tickets disponibles.\n");
+        formatJSONError(r.reply, REQUEST_REPLY_SIZE, "No hay tickets disponibles.");
+        printf("Solicitud #%d rechazada: no hay tickets disponibles.\n", r.id);
     }
 }
 
-void purchaseTicket(int idTicket){
-    int state = getTicketStateDB(idTicket);
+void purchaseTicket(const Request r) {
+    int state = getTicketStateDB(r.ticket);
     if (state == STATE_RESERVED){
-        setPurchasedInDB(idTicket);
-        printf("Solicitud aceptada: ticket %d vendido\n",idTicket);
+        setPurchasedInDB(r.ticket);
+        snprintf(r.reply, REQUEST_REPLY_SIZE, "{ \"accepted\":1 }");
+        printf("Solicitud #%d aceptada: ticket #%d confirmado.\n", r.id, r.ticket);
     }
-    else {
-        printf("Solicitud Rechazada\n");
-        if(state == STATE_FREE)
-            printf("El ticket %d no fue reservado.\n",idTicket);
-        else 
-            printf("El ticket %d fue vendido anteriormente.\n",idTicket);
+    else if (state == STATE_PURCHASED) {
+        formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket ya fue vendido.");
+        printf("Solicitud #%d rechazada: ticket #%d fue vendido anteriormente.\n", r.id, r.ticket);
     }
-}
-
-void releaseTicket(int idTicket){
-	setFreeInDB(idTicket);
-    printf("El ticket %d pierde reserva porque no fue comprado en el tiempo limite\n",idTicket);
+    else if (state == STATE_FREE) {
+        formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket no fue reservado.");
+        printf("Solicitud #%d rechazada: ticket #%d no fue reservado.\n", r.id, r.ticket);
+    }
 }
 
 void dbProcessRequest(const Request r) {
     switch (r.type) {
         case REQUEST_RESERVE:
-            reserveTicket();
+            reserveTicket(r);
             break;
         case REQUEST_CONFIRM:
-            purchaseTicket(r.ticketId);
+            purchaseTicket(r);
             break;
         default:
-            printf("Solicitud desconocida de tipo %d\n", r.type);
+            formatJSONError(r.reply, REQUEST_REPLY_SIZE, "Solicitud desconocida.");
+            printf("Solicitud #%d rechazada: Tipo de solicitud desconocida.\n");
             break;
     }
 }
 
 void *dbThreadFunction(void *vargp) {
-    initializeQueueRequest();
-
     if (!setupDb()) {
         printf("Fallo al inicializar la base de datos.\n");
         return NULL;
@@ -285,6 +285,7 @@ void *dbThreadFunction(void *vargp) {
         printf("Fallo al crear la tabla de tickets en la base de datos.\n");
         return NULL;
     }
+
     showTickets();
     
     // Process request queue.
@@ -297,6 +298,11 @@ void *dbThreadFunction(void *vargp) {
                 broadcastFree = isFullQueueRequest();
                 Request r = dequeueRequest();
                 dbProcessRequest(r);
+
+                // Notify the thread that the request has been handled.
+                pthread_mutex_lock(r.waitMutex);
+                pthread_cond_broadcast(r.waitCondition);
+                pthread_mutex_unlock(r.waitMutex);
             }
             else {
                 // Wait until queue is modified.
@@ -317,59 +323,67 @@ void *dbThreadFunction(void *vargp) {
 }
 
 ///
-/// ---------------------JSon Parsing
+/// JSON PARSER
 ///
 
-
-
-//-1 es valor de error
-//token es el indice del json
-Request *getRequestFromJSON(char * requestStr){
-    int r;
-	int i;
-	jsmn_parser p;
-	jsmntok_t t[128]; /* We expect no more than 128 tokens */
-	Request* req = (Request*) malloc(sizeof(Request));
-	req->ticketId = -1;
-
+Request *getRequestFromJSON(char *requestStr) {
+    // JSON format: { type: int, ticket: int }
+    // Only 16 tokens are supported.
+	jsmntok_t t[16];
+    jsmn_parser p;
+	
 	jsmn_init(&p);
-    r = jsmn_parse(&p, requestStr, strlen(requestStr), t, sizeof(t) / sizeof(t[0]));
+    int r = jsmn_parse(&p, requestStr, strlen(requestStr), t, sizeof(t) / sizeof(t[0]));
     if (r < 0) {
         printf("Failed to parse JSON: %d\n", r);
-		free(req);
 		return NULL;
 	}
 
-    /* Assume the top-level element is an object */
+    // Assume the top-level element is an object.
     if (r < 1 || t[0].type != JSMN_OBJECT) {
         printf("Object expected\n");
-        free(req);
         return NULL;
     }
 
-	for (i = 1; i < r; i++)
-	{
-		if (jsoneq(requestStr, &t[i], "type") == 0)
-		{
-			/* We may use strndup() to fetch string value */
-			char aux[20];
-            i++; //movemos hacia el valor
-			sprintf(aux, "%.*s", t[i].end - t[i].start, requestStr + t[i].start);
-			printf("type: %s", aux);
-			req->type = atoi(aux);
+    // Parse request from JSON.
+    char aux[128];
+    int i, type = 0, ticket = 0;
+	for (i = 1; i < (r - 1); i++) {
+		if (jsoneq(requestStr, &t[i], "type") == 0) {
+            i++;
+			snprintf(aux, sizeof(aux), "%.*s", t[i].end - t[i].start, requestStr + t[i].start);
+			type = atoi(aux);
 		}
-
-	    if (jsoneq(requestStr, &t[i], "ticket") == 0)
-	    {
-		    char aux[20];
-            i++; //movemos hacia el valor
-            sprintf(aux, "%.*s", t[i].end - t[i].start, requestStr + t[i].start);
-            printf("id: %s", aux);
-            req->ticketId = atoi(aux);            
+	    else if (jsoneq(requestStr, &t[i], "ticket") == 0) {
+            i++;
+			snprintf(aux, sizeof(aux), "%.*s", t[i].end - t[i].start, requestStr + t[i].start);
+            ticket = atoi(aux);  
 	    }
 	}
 
-	return req;
+    // Validate request before creating it.
+    if ((type == REQUEST_RESERVE) || ((type == REQUEST_CONFIRM) && (ticket > 0))) {
+        Request *req = (Request *)(malloc(sizeof(Request)));
+        req->id = -1;
+        req->type = type;
+        req->ticket = ticket;
+        req->waitMutex = (pthread_mutex_t *)(malloc(sizeof(pthread_mutex_t)));
+        req->waitCondition = (pthread_cond_t *)(malloc(sizeof(pthread_cond_t)));
+        req->reply = (char *)(malloc(sizeof(char) * REQUEST_REPLY_SIZE));
+        strcpy(req->reply, "");
+        return req;
+    }
+    else {
+        printf("Failed to validate JSON: %s\n", requestStr);
+        return NULL;
+    }
+}
+
+void freeRequest(Request *r) {
+    free(r->waitMutex);
+    free(r->waitCondition);
+    free(r->reply);
+    free(r);
 }
 
 ///
@@ -377,76 +391,48 @@ Request *getRequestFromJSON(char * requestStr){
 ///
 
 void *socketThreadFunction(void *vargp) {
-    int server_fd, new_socket, valread; 
+    // Creating socket file descriptor.
+    int serverFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverFd == 0) {
+        printf("Fallo al inicializar el socket.\n");
+        return NULL;
+    }
+
+    int opt = 1;
+    if (setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) { 
+        printf("Fallo al configurar el socket.\n");
+        return NULL;
+    }
+
     struct sockaddr_in address; 
-    int opt = 1; 
-    int addrlen = sizeof(address); 
-    char buffer[1024] = {0}; 
-    char *hello = "Server iniciado."; 
-
-    // Creating socket file descriptor 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) 
-    { 
-        perror("socket failed"); 
-        exit(EXIT_FAILURE); 
-    } 
-
-    // Forcefully attaching socket to the port
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) 
-    { 
-        perror("setsockopt"); 
-        exit(EXIT_FAILURE); 
-    } 
     address.sin_family = AF_INET; 
     address.sin_addr.s_addr = INADDR_ANY; 
-    address.sin_port = htons( PORT ); 
+    address.sin_port = htons( SERVER_PORT ); 
 
-    // Forcefully attaching socket to the port
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address))<0) 
-    { 
-        perror("bind failed"); 
-        exit(EXIT_FAILURE); 
-    } 
-    if (listen(server_fd, 3) < 0) 
-    { 
-        perror("listen"); 
-        exit(EXIT_FAILURE); 
-    } 
-    if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen))<0) 
-    { 
-        perror("accept"); 
-        exit(EXIT_FAILURE); 
-    } 
-    while (1){
-        valread = read(new_socket , buffer, 1024); 
-        printf("%s\n", buffer);
-
-        // Create Request Thread
-        // Parse JSon
-        /*
-        { type: 1, ticket: 1}
-        */
-
-        Request *req;
-        req = getRequestFromJSON(buffer);
-        if (req->type == 1){
-            createRequestThread(REQUEST_RESERVE, 0);
-        }
-        else if (req->type == 2){
-            createRequestThread(REQUEST_CONFIRM, req->ticketId);
-        }
-        //si no devuleve nada esto no va
-        send(new_socket , hello , strlen(hello) , 0 ); 
-        printf("Hello message sent\n"); 
+    if (bind(serverFd, (struct sockaddr *)(&address), sizeof(address)) < 0) { 
+        printf("Fallo al iniciar el socket en el puerto %d.\n", SERVER_PORT);
+        return NULL;
     }
-       
-    /*
-    sleep(1);
-    createRequestThread(REQUEST_RESERVE, 0);
-    sleep(1);
-    createRequestThread(REQUEST_CONFIRM, 5);
-    */
-    // TODO
+
+    if (listen(serverFd, SERVER_QUEUE_SIZE) < 0) { 
+        printf("Fallo al intentar escuchar conexiones entrantes en el socket.\n");
+        return NULL;
+    }
+
+    struct sockaddr_in clientAddress;
+    int clientAddressLength = sizeof(clientAddress); 
+    int running = 1, newSocket;
+    while (running) {
+        printf("Esperando nuevas conexiones...\n");
+        newSocket = accept(serverFd, (struct sockaddr *)(&clientAddress), (socklen_t*)(&clientAddressLength));
+        if (newSocket >= 0) {
+            printf("Creando un hilo para manejar una conexion entrante...\n");
+            createRequestThread(newSocket);
+        }
+        else {
+            printf("Fallo al aceptar una nueva conexion.\n");
+        }
+    }
 
     return NULL;
 }
@@ -455,116 +441,84 @@ void *socketThreadFunction(void *vargp) {
 /// REQUEST THREAD
 ///
 
-void *requestThreadFunction(void *vargp) {
-    Request *r = (Request *)(vargp);
-    sleep(1); // Artificial delay.
-    pthread_mutex_lock(&ctx.queueMutex);
-    {
-        while (isFullQueueRequest()) {
-            // Wait until queue is modified.
-            pthread_cond_wait(&ctx.queueCondition, &ctx.queueMutex);
-        }
+#define SOCKET_BUFFER_SIZE 1024
 
-        enqueueRequest(*r);
+void handleRequest(Request *r) {
+    pthread_mutex_lock(r->waitMutex);
+    pthread_mutex_lock(&ctx.queueMutex);
+    while (isFullQueueRequest()) {
+        // Wait until queue is modified.
+        pthread_cond_wait(&ctx.queueCondition, &ctx.queueMutex);
     }
+
+    // Enqueue this request so the DB can handle it.
+    enqueueRequest(*r);
     pthread_mutex_unlock(&ctx.queueMutex);
 
     // Notify the other threads that the queue has been modified.
     pthread_cond_broadcast(&ctx.queueCondition);
 
-    free(r);
+    // Wait until the DB handles the request.
+    pthread_cond_wait(r->waitCondition, r->waitMutex);
+    pthread_mutex_unlock(r->waitMutex);
 }
 
-void createRequestThread(int requestType, int ticketId) {
+void *requestThreadFunction(void *vargp) {
+    int socket = (int)(vargp);
+    int reading = 1;
+    char buffer[SOCKET_BUFFER_SIZE];
+    while (reading) {
+        int bytesRead = read(socket, buffer, SOCKET_BUFFER_SIZE); 
+        if (bytesRead > 0) {
+            // Ticket is optional or obligatory depending on type.
+            Request *newRequest = getRequestFromJSON(buffer);
+            if (newRequest != NULL) {
+                // Assign an id to this request.
+                newRequest->id = ctx.lastRequestId++;
+                printf("Nueva solicitud #%d de tipo %d\n", newRequest->id, newRequest->type);
+
+                // Wait until DB handles the request.
+                handleRequest(newRequest);
+
+                // Send the DB's reply via the socket.
+                int replySize = strlen(newRequest->reply);
+                if (replySize > 0) {
+                    send(socket, newRequest->reply, replySize, 0); 
+                }
+
+                // Cleanup the request.
+                freeRequest(newRequest);
+            }
+            else {
+                // Reply with an invalid format error.
+                char errorMessage[128];
+                formatJSONError(errorMessage, sizeof(errorMessage), "La solicitud no fue formateada correctamente.");
+                send(socket, errorMessage, strlen(errorMessage), 0); 
+            }
+        }
+    }
+
+    return NULL;
+}
+
+void createRequestThread(int socket) {
     pthread_t requestThreadId;
-    Request *r = (Request *) malloc(sizeof(Request));
-    r->type = requestType;
-    r->ticketId = ticketId;
-    pthread_create(&requestThreadId, NULL, requestThreadFunction, r);
+    pthread_create(&requestThreadId, NULL, requestThreadFunction, socket);
 }
 
 int main(int argc, char *argv[]) {
+    // Initialize common variables.
+    ctx.lastRequestId = 0;
+    initializeQueueRequest();
+
+    // Create and start threads.
 	pthread_t dbThreadId, socketThreadId;
 	pthread_create(&dbThreadId, NULL, dbThreadFunction, NULL);
     pthread_create(&socketThreadId, NULL, socketThreadFunction, NULL);
+
+    // Finish when both threads are finished.
     pthread_join(dbThreadId, NULL);
     pthread_join(socketThreadId, NULL);
+
 	return 0;
 }
-
-
-/*
- * A small example of jsmn parsing when JSON structure is known and number of
- * tokens is predictable.
- /
-
-static const char *JSON_STRING =
-    "{\"user\": \"johndoe\", \"admin\": false, \"uid\": 1000,\n  "
-    "\"groups\": [\"users\", \"wheel\", \"audio\", \"video\"]}";
-
-static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
-  if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
-      strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
-    return 0;
-  }
-  return -1;
-}
-
-
-/*
-
-int main() {
-  int i;
-  int r;
-  jsmn_parser p;
-  jsmntok_t t[128]; /* We expect no more than 128 tokens /
- 
-  jsmn_init(&p);
-  r = jsmn_parse(&p, JSON_STRING, strlen(JSON_STRING), t,
-                 sizeof(t) / sizeof(t[0]));
-  if (r < 0) {
-    printf("Failed to parse JSON: %d\n", r);
-    return 1;
-  }
-
-  /* Assume the top-level element is an object /
-  if (r < 1 || t[0].type != JSMN_OBJECT) {
-    printf("Object expected\n");
-    return 1;
-  }
-
-  /* Loop over all keys of the root object /
-  for (i = 1; i < r; i++) {
-    if (jsoneq(JSON_STRING, &t[i], "user") == 0) {
-      /* We may use strndup() to fetch string value /
-      printf("- User: %.*s\n", t[i + 1].end - t[i + 1].start,
-             JSON_STRING + t[i + 1].start);
-      i++;
-    } else if (jsoneq(JSON_STRING, &t[i], "admin") == 0) {
-      /* We may additionally check if the value is either "true" or "false" *
-      printf("- Admin: %.*s\n", t[i + 1].end - t[i + 1].start,
-             JSON_STRING + t[i + 1].start);
-      i++;
-    } else if (jsoneq(JSON_STRING, &t[i], "uid") == 0) {
-      /* We may want to do strtol() here to get numeric value /
-      printf("- UID: %.*s\n", t[i + 1].end - t[i + 1].start,
-             JSON_STRING + t[i + 1].start);
-      i++;
-    } else if (jsoneq(JSON_STRING, &t[i], "groups") == 0) {
-      int j;
-      printf("- Groups:\n");
-      if (t[i + 1].type != JSMN_ARRAY) {
-        continue; /* We expect groups to be an array of strings /
-      }
-      for (j = 0; j < t[i + 1].size; j++) {
-        jsmntok_t *g = &t[i + j + 2];
-        printf("  * %.*s\n", g->end - g->start, JSON_STRING + g->start);
-      }
-      i += t[i + 1].size + 1;
-    } else {
-      printf("Unexpected key: %.*s\n", t[i].end - t[i].start,
-             JSON_STRING + t[i].start);
-    }
-  }
-  return EXIT_SUCCESS;
-}*/
