@@ -10,7 +10,7 @@
 #define STATE_PURCHASED     2
 #define REQUEST_RESERVE     1
 #define REQUEST_CONFIRM     2
-#define REQUEST_MAX         50
+#define REQUEST_MAX         10
 #define TICKETS_TOTAL       10
 
 typedef struct {
@@ -38,53 +38,60 @@ void initializeQueueRequest() {
     ctx.rq.first = ctx.rq.last = -1;
 }
 
-int isEmptyQueueRequest(){
-    return ctx.rq.first == -1 || (ctx.rq.first == ctx.rq.last + 1);
+int isEmptyQueueRequest() {
+    return ctx.rq.first == -1;
 }
 
-int isFullQueueRequest(){
+int isFullQueueRequest() {
     return (ctx.rq.last + 1) == ctx.rq.first || (ctx.rq.first == 0 && ctx.rq.last == REQUEST_MAX - 1);
 }
 
 //Pre: !isFullQueueRequest()
 void enqueueRequest(Request r) {
-    if(isEmptyQueueRequest()){
-        ctx.rq.first = ctx.rq.last = 0;
+    if (isEmptyQueueRequest()) {
+        ctx.rq.first = 0;
+    }
+
+    if (ctx.rq.last == REQUEST_MAX - 1) {
+        ctx.rq.last = 0;
     }
     else {
-        if (ctx.rq.last == REQUEST_MAX - 1){
-            ctx.rq.last = 0;
-        }
-        else {
-            ctx.rq.last += 1;
-        }
+        ctx.rq.last++;
     }
+
     ctx.rq.queue[ctx.rq.last] = r;
 }
 
 //Pre: !isEmptyQueueRequest()
 Request dequeueRequest() {
-    if(ctx.rq.first != REQUEST_MAX - 1)
-	    return ctx.rq.queue[ctx.rq.first++];
+    int idx = ctx.rq.first;
+    if (ctx.rq.first == ctx.rq.last) {
+        ctx.rq.first = ctx.rq.last = -1;
+    }
     else {
-        int i = ctx.rq.first;
-		ctx.rq.first = 0;
-		return ctx.rq.queue[i];
-	}
+        if (ctx.rq.first == REQUEST_MAX - 1) {
+            ctx.rq.first = 0;
+        }
+        else {
+            ctx.rq.first++;
+        }
+    }
+
+    return ctx.rq.queue[idx];
 }
 
 // Arquitectura de threads:
 //  Thread principal:
-//    - Crear thread DB
-//    - Crear thread de comunicacion
-//    - Join ambos threads
+//    - Crear thread DB.
+//    - Crear thread de comunicacion.
+//    - Join ambos threads.
 //  Thread de DB:
-//    - Consume cola de solicitudes
+//    - Consume cola de solicitudes.
 //  Thread de comunicacion por sockets:
-//    - Por cada solicitud entrante, crea un thread para manejarlo
+//    - Por cada solicitud entrante, crea un thread para manejarlo.
 //  Thread por cada solicitud:
-//    - Demora artificial aleatoria
-//    - Encolar solicitud para DB
+//    - Demora artificial aleatoria.
+//    - Encolar solicitud para DB.
 
 ///
 /// DATABASE THREAD
@@ -236,20 +243,29 @@ void *dbThreadFunction(void *vargp) {
     showTickets();
     
     // Process request queue.
-    int dbRunning = 1;
-    pthread_mutex_lock(&ctx.queueMutex);
-    {
-        while (dbRunning) {
+    int dbRunning = 1, broadcastFree = 0;
+    while (dbRunning) {
+        broadcastFree = 0;
+        pthread_mutex_lock(&ctx.queueMutex);
+        {
             if (!isEmptyQueueRequest()) {
+                broadcastFree = isFullQueueRequest();
                 Request r = dequeueRequest();
                 dbProcessRequest(r);
             }
             else {
+                // Wait until queue is modified.
                 pthread_cond_wait(&ctx.queueCondition, &ctx.queueMutex);
             }
         }
+        pthread_mutex_unlock(&ctx.queueMutex);
+
+        // Notify the other threads that the queue has been modified.
+        if (broadcastFree) {
+            pthread_cond_broadcast(&ctx.queueCondition);
+        }
     }
-    pthread_mutex_unlock(&ctx.queueMutex);
+    
 
     closeDb();
     return NULL;
@@ -260,10 +276,9 @@ void *dbThreadFunction(void *vargp) {
 ///
 
 void *socketThreadFunction(void *vargp) {
-    sleep(3);
+    sleep(1);
     createRequestThread(REQUEST_RESERVE, 0);
-
-    sleep(3);
+    sleep(1);
     createRequestThread(REQUEST_CONFIRM, 5);
 
     // TODO
@@ -276,20 +291,22 @@ void *socketThreadFunction(void *vargp) {
 ///
 
 void *requestThreadFunction(void *vargp) {
-    sleep(2); // Artificial delay.
-
     Request *r = (Request *)(vargp);
+    sleep(1); // Artificial delay.
     pthread_mutex_lock(&ctx.queueMutex);
     {
-        if (!isFullQueueRequest()) {
-            enqueueRequest(*r);
+        while (isFullQueueRequest()) {
+            // Wait until queue is modified.
+            pthread_cond_wait(&ctx.queueCondition, &ctx.queueMutex);
         }
-        else {
-            printf("No se pudo manejar la solicitud porque la cola está llena.");
-        }
+
+        enqueueRequest(*r);
     }
     pthread_mutex_unlock(&ctx.queueMutex);
+
+    // Notify the other threads that the queue has been modified.
     pthread_cond_broadcast(&ctx.queueCondition);
+
     free(r);
 }
 
@@ -309,29 +326,3 @@ int main(int argc, char *argv[]) {
     pthread_join(socketThreadId, NULL);
 	return 0;
 }
-
-// Pthread example.
-//   pthread_t thread_id;
-//   pthread_create(&thread_id, NULL, myThreadFun, NULL); // Starts thread inmediately.
-//   pthread_join(thread_id, NULL); // Waits until thread is finished.
-//
-// Mutex example:
-//  pthread_mutex_t lock;
-//  pthread_mutex_lock(&lock);
-//  pthread_mutex_unlock(&lock);
-//
-// Waiting condition example:
-//  pthread_cond_t
-//  pthread_cond_broadcast(&cond);
-//
-// Waiting thread:
-//  pthread_mutex_lock(&mutex);
-//  while (condition) {
-//    pthread_cond_wait(&cond, &mutex);
-//  }
-//  pthread_mutex_unlock(&mutex);
-//
-// Wakeup thread:
-//  pthread_mutex_lock(&mutex);
-//  pthread_cond_broadcast(&cond);
-//  pthread_mutex_unlock(&mutex);
