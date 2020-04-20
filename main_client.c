@@ -65,7 +65,7 @@ int main(int argc, char const *argv[])
             int id;
             printf("Ingrese el id del ticket reservado.\n");
             scanf("%d", &id);     
-            sprintf(json,"{\"type\": 2, \"ticket\":%d}", id);   
+            sprintf(json,"{\"type\": 3, \"ticket\":%d}", id);   
             send(sock , json , strlen(json) , 0 ); 
             valread = read( sock , buffer, 1024); 
             printf("%s\n",buffer ); 
