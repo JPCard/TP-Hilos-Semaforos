@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <unistd.h> //para el sleep
 #include <pthread.h>
+#include <sys/socket.h>
 
 #define STATE_FREE          0
 #define STATE_RESERVED      1
@@ -42,7 +43,7 @@ int isEmptyQueueRequest(){
 }
 
 int isFullQueueRequest(){
-    return (ctx.rq.last - 1) == ctx.rq.first || (ctx.rq.first == 0 && ctx.rq.last == REQUEST_MAX - 1);
+    return (ctx.rq.last + 1) == ctx.rq.first || (ctx.rq.first == 0 && ctx.rq.last == REQUEST_MAX - 1);
 }
 
 //Pre: !isFullQueueRequest()
