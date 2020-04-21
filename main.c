@@ -22,7 +22,7 @@
 #define TOKEN_TICKET_ID     3
 #define REQUEST_REPLY_SIZE  256
 
-#define PRINT_DB_AFTER_CHANGES
+//#define PRINT_DB_AFTER_CHANGES
 
 typedef struct {
     int id;
