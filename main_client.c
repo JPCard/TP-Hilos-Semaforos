@@ -13,6 +13,7 @@ void sendAndWaitReply(int sock, char *message) {
     printf("Mensaje enviado: %s\n", message);
     int bytesRead = read(sock, replyBuffer, sizeof(replyBuffer));
     if (bytesRead > 0) {
+        replyBuffer[bytesRead] = '\0';
         printf("Respuesta recibida: %s\n", replyBuffer);
     }
 }
@@ -55,7 +56,7 @@ int main(int argc, char const *argv[]) {
         switch (op) {
         case 1: 
             // Reservar Ticket
-            strcpy(json,"{\"type\": 1}");
+            strcpy(json, "{\"type\": 1}");
             sendAndWaitReply(sock, json);
             break;
         case 2: 

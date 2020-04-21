@@ -214,7 +214,6 @@ int getTicketStateDB(int idTicket){
         state = sqlite3_column_int(stmt, 0);
     }
     sqlite3_finalize(stmt);
-
     return state;
 }
 
@@ -258,6 +257,10 @@ void purchaseTicket(const Request r) {
         formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket no fue reservado.");
         printf("Solicitud #%d rechazada: ticket #%d no fue reservado.\n", r.id, r.ticket);
     }
+    else {
+        formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket no existe.");
+        printf("Solicitud #%d rechazada: ticket #%d no existe.\n", r.id, r.ticket);
+    }
 }
 
 void dbProcessRequest(const Request r) {
@@ -293,23 +296,24 @@ void *dbThreadFunction(void *vargp) {
     while (dbRunning) {
         broadcastFree = 0;
         pthread_mutex_lock(&ctx.queueMutex);
-        {
-            if (!isEmptyQueueRequest()) {
-                broadcastFree = isFullQueueRequest();
-                Request r = dequeueRequest();
-                dbProcessRequest(r);
+        if (!isEmptyQueueRequest()) {
+            // Dequeue and unlock.
+            broadcastFree = isFullQueueRequest();
+            Request r = dequeueRequest();
+            pthread_mutex_unlock(&ctx.queueMutex);
 
-                // Notify the thread that the request has been handled.
-                pthread_mutex_lock(r.waitMutex);
-                pthread_cond_broadcast(r.waitCondition);
-                pthread_mutex_unlock(r.waitMutex);
-            }
-            else {
-                // Wait until queue is modified.
-                pthread_cond_wait(&ctx.queueCondition, &ctx.queueMutex);
-            }
+            dbProcessRequest(r);
+
+            // Notify the thread that the request has been handled.
+            pthread_mutex_lock(r.waitMutex);
+            pthread_cond_broadcast(r.waitCondition);
+            pthread_mutex_unlock(r.waitMutex);
         }
-        pthread_mutex_unlock(&ctx.queueMutex);
+        else {
+            // Wait until queue is modified.
+            pthread_cond_wait(&ctx.queueCondition, &ctx.queueMutex);
+            pthread_mutex_unlock(&ctx.queueMutex);
+        }
 
         // Notify the other threads that the queue has been modified.
         if (broadcastFree) {
@@ -317,7 +321,6 @@ void *dbThreadFunction(void *vargp) {
         }
     }
     
-
     closeDb();
     return NULL;
 }
@@ -335,7 +338,7 @@ Request *getRequestFromJSON(char *requestStr) {
 	jsmn_init(&p);
     int r = jsmn_parse(&p, requestStr, strlen(requestStr), t, sizeof(t) / sizeof(t[0]));
     if (r < 0) {
-        printf("Failed to parse JSON: %d\n", r);
+        printf("Failed to parse JSON: %d\nString: %s\n", r, requestStr);
 		return NULL;
 	}
 
@@ -380,10 +383,14 @@ Request *getRequestFromJSON(char *requestStr) {
 }
 
 void freeRequest(Request *r) {
+    // TODO: free causa problemas en el funcionamiento del phtread al devolverle la misma direccion a la proxima solicitud.
+    // Ver como arreglar refactorizando a una cantidad fija para el vector de request queue.
+    /*
     free(r->waitMutex);
     free(r->waitCondition);
     free(r->reply);
     free(r);
+    */
 }
 
 ///
@@ -444,6 +451,9 @@ void *socketThreadFunction(void *vargp) {
 #define SOCKET_BUFFER_SIZE 1024
 
 void handleRequest(Request *r) {
+    // Delay artificial para simular tiempo de respuesta.
+    sleep(1);
+
     pthread_mutex_lock(r->waitMutex);
     pthread_mutex_lock(&ctx.queueMutex);
     while (isFullQueueRequest()) {
@@ -470,6 +480,8 @@ void *requestThreadFunction(void *vargp) {
     while (reading) {
         int bytesRead = read(socket, buffer, SOCKET_BUFFER_SIZE); 
         if (bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+
             // Ticket is optional or obligatory depending on type.
             Request *newRequest = getRequestFromJSON(buffer);
             if (newRequest != NULL) {
@@ -483,7 +495,11 @@ void *requestThreadFunction(void *vargp) {
                 // Send the DB's reply via the socket.
                 int replySize = strlen(newRequest->reply);
                 if (replySize > 0) {
-                    send(socket, newRequest->reply, replySize, 0); 
+                    send(socket, newRequest->reply, replySize, 0);
+                    printf("Respuesta de solicitud #%d enviada: %s\n", newRequest->id, newRequest->reply);
+                }
+                else {
+                    printf("No hay respuesta para enviar para la solicitud #%d\n", newRequest->id);
                 }
 
                 // Cleanup the request.
@@ -495,6 +511,10 @@ void *requestThreadFunction(void *vargp) {
                 formatJSONError(errorMessage, sizeof(errorMessage), "La solicitud no fue formateada correctamente.");
                 send(socket, errorMessage, strlen(errorMessage), 0); 
             }
+        }
+        else {
+            printf("Cerrando conexion para el cliente.\n");
+            reading = 0;
         }
     }
 
