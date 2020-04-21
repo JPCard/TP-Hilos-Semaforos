@@ -68,6 +68,8 @@ void formatJSONError(char *out, int max, char *message) {
 
 void initializeQueueRequest() {
     ctx.rq.first = ctx.rq.last = -1;
+    pthread_mutex_init(&ctx.queueMutex, NULL);
+    pthread_cond_init(&ctx.queueCondition, NULL);
 }
 
 int isEmptyQueueRequest() {
@@ -372,6 +374,10 @@ Request *getRequestFromJSON(char *requestStr) {
         req->ticket = ticket;
         req->waitMutex = (pthread_mutex_t *)(malloc(sizeof(pthread_mutex_t)));
         req->waitCondition = (pthread_cond_t *)(malloc(sizeof(pthread_cond_t)));
+
+        pthread_mutex_init(req->waitMutex, NULL);
+        pthread_cond_init(req->waitCondition, NULL);
+
         req->reply = (char *)(malloc(sizeof(char) * REQUEST_REPLY_SIZE));
         strcpy(req->reply, "");
         return req;
@@ -383,14 +389,12 @@ Request *getRequestFromJSON(char *requestStr) {
 }
 
 void freeRequest(Request *r) {
-    // TODO: free causa problemas en el funcionamiento del phtread al devolverle la misma direccion a la proxima solicitud.
-    // Ver como arreglar refactorizando a una cantidad fija para el vector de request queue.
-    /*
+    pthread_mutex_destroy(r->waitMutex);
+    pthread_cond_destroy(r->waitCondition);
     free(r->waitMutex);
     free(r->waitCondition);
     free(r->reply);
     free(r);
-    */
 }
 
 ///
