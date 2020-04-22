@@ -12,17 +12,20 @@
 //returns: 1-message sent -> continue
 //         0-connection lost -> abort
 int sendAndWaitReply(int sock, char *message) {
+    int msgSent;
     char replyBuffer[1024];
-    send(sock, message, strlen(message), 0);
-    printf("Mensaje enviado: %s\n", message);
-    int bytesRead = read(sock, replyBuffer, sizeof(replyBuffer));
-    if (bytesRead > 0) {
-        replyBuffer[bytesRead] = '\0';
-        printf("Respuesta recibida: %s\n", replyBuffer);
-        return 1;
+    msgSent = send(sock, message, strlen(message), 0);
+    if(msgSent != -1){
+        printf("Mensaje enviado: %s\n", message);
+        int bytesRead = read(sock, replyBuffer, sizeof(replyBuffer));
+        if (bytesRead > 0) {
+            replyBuffer[bytesRead] = '\0';
+            printf("Respuesta recibida: %s\n", replyBuffer);
+            return 1;
+        }
+        else
+            return 0;
     }
-    else
-        return 0;
 }
 
 int main(int argc, char const *argv[]) {
