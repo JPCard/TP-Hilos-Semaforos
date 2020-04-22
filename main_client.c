@@ -29,7 +29,7 @@ int main(int argc, char const *argv[]) {
     struct sockaddr_in serv_addr;
     char buffer[1024] = {0};
     int op;
-    int abort = 0;
+    int ok = 1;
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         printf("\n Socket creation error \n");
         return -1;
@@ -80,7 +80,7 @@ int main(int argc, char const *argv[]) {
             printf("Opcion invalida, por favor vuelva a intentar.\n");
             break;
         }
-        if(abort){
+        if(!ok){
             op = 0;
             printf("Se perdio la conexion con el servidor.\n");
             printf("Finalizando...\n");
