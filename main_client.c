@@ -26,6 +26,8 @@ int sendAndWaitReply(int sock, char *message) {
         else
             return 0;
     }
+    else
+        return 0;
 }
 
 int main(int argc, char const *argv[]) {
@@ -96,7 +98,7 @@ int main(int argc, char const *argv[]) {
         }
         if(!ok){
             op = 0;
-            printf("Se perdio la conexion con el servidor.\n");
+            printf("El servidor no responde.\n");
             printf("Finalizando...\n");
         }
     } while (op != 0);
