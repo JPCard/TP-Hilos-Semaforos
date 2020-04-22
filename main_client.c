@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
@@ -30,10 +31,18 @@ int main(int argc, char const *argv[]) {
     char buffer[1024] = {0};
     int op;
     int ok = 1;
+    struct timeval tv;
+
+    tv.tv_sec = 3; //seconds to wait for a connection
+    tv.tv_usec = 0;
+
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         printf("\n Socket creation error \n");
         return -1;
     }
+
+
+
 
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(HOST_PORT);
@@ -50,6 +59,8 @@ int main(int argc, char const *argv[]) {
         printf("\nConnection Failed \n");
         return -1;
     }
+
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv); //sets connection timeout
 
     do {
         printf("Ingrese la operacion a realizas:\n");
