@@ -103,5 +103,7 @@ int main(int argc, char const *argv[]) {
         }
     } while (op != 0);
 
+    close(sock);
+
     return 0;
 }
