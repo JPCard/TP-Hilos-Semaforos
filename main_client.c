@@ -59,11 +59,15 @@ int main(int argc, char const *argv[]) {
         return -1;
     }
 
+
+
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
         printf("\nConnection Failed \n");
         return -1;
     }
+
+
 
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv); //sets connection timeout
 

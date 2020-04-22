@@ -519,6 +519,7 @@ void *requestThreadFunction(void *vargp) {
         else {
             printf("Cerrando conexion para el cliente.\n");
             reading = 0;
+	    close(socket);
         }
     }
 
