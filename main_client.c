@@ -64,14 +64,14 @@ int main(int argc, char const *argv[]) {
         case 1:
             // Reservar Ticket
             strcpy(json, "{\"type\": 1}");
-            abort = sendAndWaitReply(sock, json);
+            ok = sendAndWaitReply(sock, json);
             break;
         case 2:
             // Confirmar compra Ticket
             printf("Ingrese el id del ticket reservado.\n");
             scanf("%d", &id);
             sprintf(json, "{\"type\": 2, \"ticket\":%d}", id);
-            abort = sendAndWaitReply(sock, json);
+            ok = sendAndWaitReply(sock, json);
             break;
         case 0:
             printf("Finalizando...\n");
