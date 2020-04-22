@@ -48,7 +48,7 @@ int main(int argc, char const *argv[]) {
 
 
 
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv); //sets connection timeout
+
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(HOST_PORT);
 
@@ -65,7 +65,7 @@ int main(int argc, char const *argv[]) {
         return -1;
     }
 
-
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv); //sets connection timeout
 
     do {
         printf("Ingrese la operacion a realizas:\n");
