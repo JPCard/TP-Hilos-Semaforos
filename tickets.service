@@ -1,0 +1,15 @@
+[Unit]
+Description=Tickets Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=forking
+Restart=always
+RestartSec=1
+User=ubuntu
+WorkingDirectory=/home/ubuntu/tickets
+ExecStart=/home/ubuntu/tickets/SERVIDOR_TICKETS
+
+[Install]
+WantedBy=multi-user.target

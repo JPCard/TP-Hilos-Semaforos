@@ -22,6 +22,8 @@
 #define TOKEN_TICKET_ID     3
 #define REQUEST_REPLY_SIZE  256
 
+#define LOG(format,args...) { fprintf(ctx.logFp, format, ## args); fflush(ctx.logFp); }
+
 //#define PRINT_DB_AFTER_CHANGES
 
 typedef struct {
@@ -44,6 +46,7 @@ typedef struct {
   pthread_mutex_t queueMutex;
   RequestQueue rq;
   int lastRequestId;
+  FILE *logFp;
 } Context;
 
 Context ctx;
@@ -140,7 +143,7 @@ int setupDbTable() {
                     "state INTEGER);";
 
     if (sqlite3_exec(ctx.database, query, NULL, NULL, &error) != 0) {
-        printf("sqlite3_exec error: %s\n", error);
+        LOG("sqlite3_exec error: %s\n", error);
         return 0;
     }
 
@@ -148,7 +151,7 @@ int setupDbTable() {
     sqlite3_exec(ctx.database, "SELECT COUNT(*) FROM tickets;", countCallback, &ticketCount, &error);
 
     if (ticketCount == 0) {
-        printf("Inicializando %d tickets en la tabla.\n", TICKETS_TOTAL);
+        LOG( "Inicializando %d tickets en la tabla.\n", TICKETS_TOTAL);
         int i;
         for (i = 0; i < TICKETS_TOTAL; i++) {
             sqlite3_exec(ctx.database, "INSERT INTO tickets (state) VALUES (0);", NULL, NULL, &error);
@@ -167,14 +170,14 @@ void showTickets() {
 		for (i = 0; i < cols; i++) {
 			switch (sqlite3_column_type(stmt, i)) {
 			case (SQLITE_INTEGER):
-				printf("%d (%s), ", sqlite3_column_int(stmt, i), sqlite3_column_name(stmt, i));
+				LOG("%d (%s), ", sqlite3_column_int(stmt, i), sqlite3_column_name(stmt, i));
 				break;
 			default:
 				break;
 			}
 		}
 
-		printf("\n");
+		LOG("\n");
 
 	}
 
@@ -198,7 +201,7 @@ void setStateInDB(int idTicket, int state) {
     char query[256];
     sprintf(query, "UPDATE tickets SET state = %d WHERE id = %d;", state, idTicket);
     if (sqlite3_exec(ctx.database, query, NULL, NULL, &error) != 0) {
-        printf("sqlite3_exec error: %s\n", error);
+        LOG("sqlite3_exec error: %s\n", error);
     }
 
 #ifdef PRINT_DB_AFTER_CHANGES
@@ -236,11 +239,11 @@ void reserveTicket(const Request r) {
     if (idTicket > 0) {
         setReservedInDB(idTicket);
         snprintf(r.reply, REQUEST_REPLY_SIZE, "{ \"ticket\":%d }", idTicket);
-        printf("Solicitud #%d aceptada: ticket #%d reservado.\n", r.id, idTicket);
+        LOG("Solicitud #%d aceptada: ticket #%d reservado.\n", r.id, idTicket);
     }
     else {
         formatJSONError(r.reply, REQUEST_REPLY_SIZE, "No hay tickets disponibles.");
-        printf("Solicitud #%d rechazada: no hay tickets disponibles.\n", r.id);
+        LOG("Solicitud #%d rechazada: no hay tickets disponibles.\n", r.id);
     }
 }
 
@@ -249,19 +252,19 @@ void purchaseTicket(const Request r) {
     if (state == STATE_RESERVED){
         setPurchasedInDB(r.ticket);
         snprintf(r.reply, REQUEST_REPLY_SIZE, "{ \"accepted\":1 }");
-        printf("Solicitud #%d aceptada: ticket #%d confirmado.\n", r.id, r.ticket);
+        LOG("Solicitud #%d aceptada: ticket #%d confirmado.\n", r.id, r.ticket);
     }
     else if (state == STATE_PURCHASED) {
         formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket ya fue vendido.");
-        printf("Solicitud #%d rechazada: ticket #%d fue vendido anteriormente.\n", r.id, r.ticket);
+        LOG("Solicitud #%d rechazada: ticket #%d fue vendido anteriormente.\n", r.id, r.ticket);
     }
     else if (state == STATE_FREE) {
         formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket no fue reservado.");
-        printf("Solicitud #%d rechazada: ticket #%d no fue reservado.\n", r.id, r.ticket);
+        LOG("Solicitud #%d rechazada: ticket #%d no fue reservado.\n", r.id, r.ticket);
     }
     else {
         formatJSONError(r.reply, REQUEST_REPLY_SIZE, "El ticket no existe.");
-        printf("Solicitud #%d rechazada: ticket #%d no existe.\n", r.id, r.ticket);
+        LOG("Solicitud #%d rechazada: ticket #%d no existe.\n", r.id, r.ticket);
     }
 }
 
@@ -275,19 +278,19 @@ void dbProcessRequest(const Request r) {
             break;
         default:
             formatJSONError(r.reply, REQUEST_REPLY_SIZE, "Solicitud desconocida.");
-            printf("Solicitud #%d rechazada: Tipo de solicitud desconocida.\n");
+            LOG("Solicitud #%d rechazada: Tipo de solicitud desconocida.\n");
             break;
     }
 }
 
 void *dbThreadFunction(void *vargp) {
     if (!setupDb()) {
-        printf("Fallo al inicializar la base de datos.\n");
+        LOG("Fallo al inicializar la base de datos.\n");
         return NULL;
     }
     
     if (!setupDbTable()) {
-        printf("Fallo al crear la tabla de tickets en la base de datos.\n");
+        LOG("Fallo al crear la tabla de tickets en la base de datos.\n");
         return NULL;
     }
 
@@ -340,13 +343,13 @@ Request *getRequestFromJSON(char *requestStr) {
 	jsmn_init(&p);
     int r = jsmn_parse(&p, requestStr, strlen(requestStr), t, sizeof(t) / sizeof(t[0]));
     if (r < 0) {
-        printf("Failed to parse JSON: %d\nString: %s\n", r, requestStr);
+        LOG("Failed to parse JSON: %d\nString: %s\n", r, requestStr);
 		return NULL;
 	}
 
     // Assume the top-level element is an object.
     if (r < 1 || t[0].type != JSMN_OBJECT) {
-        printf("Object expected\n");
+        LOG("Object expected\n");
         return NULL;
     }
 
@@ -383,7 +386,7 @@ Request *getRequestFromJSON(char *requestStr) {
         return req;
     }
     else {
-        printf("Failed to validate JSON: %s\n", requestStr);
+        LOG("Failed to validate JSON: %s\n", requestStr);
         return NULL;
     }
 }
@@ -405,13 +408,13 @@ void *socketThreadFunction(void *vargp) {
     // Creating socket file descriptor.
     int serverFd = socket(AF_INET, SOCK_STREAM, 0);
     if (serverFd == 0) {
-        printf("Fallo al inicializar el socket.\n");
+        LOG("Fallo al inicializar el socket.\n");
         return NULL;
     }
 
     int opt = 1;
     if (setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) { 
-        printf("Fallo al configurar el socket.\n");
+        LOG("Fallo al configurar el socket.\n");
         return NULL;
     }
 
@@ -421,12 +424,12 @@ void *socketThreadFunction(void *vargp) {
     address.sin_port = htons( SERVER_PORT ); 
 
     if (bind(serverFd, (struct sockaddr *)(&address), sizeof(address)) < 0) { 
-        printf("Fallo al iniciar el socket en el puerto %d.\n", SERVER_PORT);
+        LOG("Fallo al iniciar el socket en el puerto %d.\n", SERVER_PORT);
         return NULL;
     }
 
     if (listen(serverFd, SERVER_QUEUE_SIZE) < 0) { 
-        printf("Fallo al intentar escuchar conexiones entrantes en el socket.\n");
+        LOG("Fallo al intentar escuchar conexiones entrantes en el socket.\n");
         return NULL;
     }
 
@@ -434,14 +437,14 @@ void *socketThreadFunction(void *vargp) {
     int clientAddressLength = sizeof(clientAddress); 
     int running = 1, newSocket;
     while (running) {
-        printf("Esperando nuevas conexiones...\n");
+        LOG("Esperando nuevas conexiones...\n");
         newSocket = accept(serverFd, (struct sockaddr *)(&clientAddress), (socklen_t*)(&clientAddressLength));
         if (newSocket >= 0) {
-            printf("Creando un hilo para manejar una conexion entrante...\n");
+            LOG("Creando un hilo para manejar una conexion entrante...\n");
             createRequestThread(newSocket);
         }
         else {
-            printf("Fallo al aceptar una nueva conexion.\n");
+            LOG("Fallo al aceptar una nueva conexion.\n");
         }
     }
 
@@ -491,7 +494,7 @@ void *requestThreadFunction(void *vargp) {
             if (newRequest != NULL) {
                 // Assign an id to this request.
                 newRequest->id = ctx.lastRequestId++;
-                printf("Nueva solicitud #%d de tipo %d\n", newRequest->id, newRequest->type);
+                LOG("Nueva solicitud #%d de tipo %d\n", newRequest->id, newRequest->type);
 
                 // Wait until DB handles the request.
                 handleRequest(newRequest);
@@ -500,10 +503,10 @@ void *requestThreadFunction(void *vargp) {
                 int replySize = strlen(newRequest->reply);
                 if (replySize > 0) {
                     send(socket, newRequest->reply, replySize, 0);
-                    printf("Respuesta de solicitud #%d enviada: %s\n", newRequest->id, newRequest->reply);
+                    LOG("Respuesta de solicitud #%d enviada: %s\n", newRequest->id, newRequest->reply);
                 }
                 else {
-                    printf("No hay respuesta para enviar para la solicitud #%d\n", newRequest->id);
+                    LOG("No hay respuesta para enviar para la solicitud #%d\n", newRequest->id);
                 }
 
                 // Cleanup the request.
@@ -517,7 +520,7 @@ void *requestThreadFunction(void *vargp) {
             }
         }
         else {
-            printf("Cerrando conexion para el cliente.\n");
+            LOG("Cerrando conexion para el cliente.\n");
             reading = 0;
 	    close(socket);
         }
@@ -532,6 +535,9 @@ void createRequestThread(int socket) {
 }
 
 int childMain() {
+    // Initialize log.
+    ctx.logFp = fopen("tickets.log", "wt");
+
     // Initialize common variables.
     ctx.lastRequestId = 0;
     initializeQueueRequest();
