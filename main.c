@@ -531,7 +531,7 @@ void createRequestThread(int socket) {
     pthread_create(&requestThreadId, NULL, requestThreadFunction, socket);
 }
 
-int main(int argc, char *argv[]) {
+int childMain() {
     // Initialize common variables.
     ctx.lastRequestId = 0;
     initializeQueueRequest();
@@ -546,4 +546,32 @@ int main(int argc, char *argv[]) {
     pthread_join(socketThreadId, NULL);
 
 	return 0;
+}
+
+int main(int argc, char *argv[]) {
+    pid_t process_id = 0;
+    pid_t sid = 0;
+
+    // Create child process.
+    process_id = fork();
+
+    // Indication of fork() failure.
+    if (process_id < 0) {
+        fprintf(stderr, "Fork failed!\n");
+        return 1;
+    }
+    // Kill the parent process.
+    else if (process_id > 0) {
+        fprintf(stdout, "PID of child process %d\n", process_id);
+        return 0;
+    }
+
+    // Make child the new process leader.
+    sid = setsid();
+    if(sid < 0) {
+        fprintf(stderr, "Failed to create new session for child process\n");
+        return 1;
+    }
+
+	return childMain();
 }
